@@ -1,0 +1,28 @@
+{
+  "name": "servely",
+  "version": "1.0.0",
+  "description": "Node server with cluster capabilities.",
+  "main": "index.js",
+  "dependencies": {
+    "express": "^4.17.1"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/plungedtoilet/servely.git"
+  },
+  "keywords": [
+    "Node",
+    "Cluster",
+    "Server"
+  ],
+  "author": "Reynaldo Bontje",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/plungedtoilet/servely/issues"
+  },
+  "homepage": "https://github.com/plungedtoilet/servely#readme"
+}
