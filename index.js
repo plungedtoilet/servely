@@ -54,7 +54,6 @@ class SuperServer extends EventEmitter {
       (this.options.certPath !== null && this.options.keyPath === null)
     ) throw new Error('HTTPS Error. Missing certificate or public key.');
     cluster.on('online', (worker)=>{
-      workers.push(worker);
       worker.send({
         cmd: "greet",
         content: Object.assign({
@@ -62,17 +61,46 @@ class SuperServer extends EventEmitter {
         }, this.options)
       });
       if (this.options.count === ++ready) this.emit("online");
-    })
+    });
+    cluster.on('message', (worker, message)=>{
+      switch (message.cmd) {
+        case "request":
+          this.emit("request", message.content.request, message.content.id);
+          break;
+        default:
+
+      }
+    });
     cluster.setupMaster({
       exec: path.resolve(__dirname, __filename)
     });
     for (let i = 0; i < this.options.count; i++) {
-      cluster.fork({
+      workers.push(cluster.fork({
         "PARENT_ID": `SuperServer:${this.id}`,
-        "PARENT_CWD": process.cwd()
-      });
+        "PARENT_CWD": process.cwd(),
+        "WORKER_ID": i
+      }));
     }
     this.listen = this.listen.bind(this);
+  }
+  kill (...args) {
+    if (args.length === 0) {
+      this.workers.forEach((worker) => {
+        worker.send({
+          cmd: "kill"
+        });
+      });
+    } else {
+      args.forEach((id) => {
+        try {
+          workers[id].send({
+            cmd: "kill"
+          });
+        } catch (e) {
+          console.error(e);
+        }
+      });
+    }
   }
   listen (port) {
     //If port is set it serves on that port. otherwise, it uses the init port.
@@ -97,13 +125,15 @@ module.exports = SuperServer;
 if (cluster.isMaster) {
 
 } else if (cluster.isWorker) {
-  const id = cluster.worker.id;
+  const id = process.env.WORKER_ID;
+  const sockets = [];
   const scope = {
     handler: null,
     keyPath: null,
     certPath: null,
     port: null,
-    express: null
+    express: null,
+    server: null
   };
   cluster.worker.on('message', (message)=>{
     switch (message.cmd) {
@@ -121,8 +151,8 @@ if (cluster.isMaster) {
           //HTTP
           if (!scope.express) {
             //Not using express
-            const server = http.createServer(scope.handler);
-            server.listen(scope.port, (err)=>{
+            scope.server = http.createServer(scope.handler);
+            scope.server.listen(scope.port, (err)=>{
               if (err) {
                 console.error(err);
               } else {
@@ -132,9 +162,9 @@ if (cluster.isMaster) {
           } else {
             //Using Express.
             const app = express();
-            const server = http.createServer(app);
+            scope.server = http.createServer(app);
             scope.handler(app);
-            server.listen(scope.port, (err)=>{
+            scope.server.listen(scope.port, (err)=>{
               if (err) {
                 console.error(err);
               } else {
@@ -146,11 +176,11 @@ if (cluster.isMaster) {
           //HTTPS
           if (!scope.express) {
             //Not using express
-            const server = https.createServer({
+            scope.server = https.createServer({
               key: fs.readFileSync(scope.keyPath),
               cert: fs.readFileSync(scope.certPath)
             }, scope.handler);
-            server.listen(scope.port, (err)=>{
+            scope.server.listen(scope.port, (err)=>{
               if (err) {
                 console.error(err);
               } else {
@@ -160,12 +190,12 @@ if (cluster.isMaster) {
           } else {
             //Using Express.
             const app = express();
-            const server = https.createServer({
+            scope.server = https.createServer({
               key: fs.readFileSync(scope.keyPath),
               cert: fs.readFileSync(scope.certPath)
             }, app);
             scope.handler(app);
-            server.listen(scope.port, (err)=>{
+            scope.server.listen(scope.port, (err)=>{
               if (err) {
                 console.error(err);
               } else {
@@ -174,6 +204,40 @@ if (cluster.isMaster) {
             });
           }
         }
+        scope.server.on('connection', (socket)=>{
+          sockets.push(socket);
+          socket.once('close', ()=>{
+            sockets.splice(sockets.indexOf(socket), 1);
+          });
+        });
+        scope.server.on('request', (req)=>{
+          cluster.worker.send({
+            cmd: "request",
+            content: {
+              id: id,
+              request: {
+                path: req.url,
+                method: req.method
+              }
+            }
+          });
+        });
+        break;
+      case "kill":
+        let time = 10;
+        let interval = setInterval(()=>{
+          if (!(time-- > 1)) {
+            console.log(`${process.env.PARENT_ID}:${id} Closing in ${time}...`);
+          } else {
+            server.close(()=>{
+              console.log(`${process.env.PARENT_ID}:${id} Server closed.`);
+            });
+            sockets.forEach((socket) => {
+              socket.destroy();
+            });
+            clearInterval(interval);
+          }
+        }, 1000);
         break;
       default:
         console.error("Worker recieved unknown command.")
